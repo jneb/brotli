@@ -10,31 +10,29 @@ The first code is for after the space/new line, the other for "in the middle"
 Newlines are handled by copying: distance is always 28, length is always 2.
 """
 
-#TODO: make two distance block types, and switch blocks after the first
-
 source = '''
 0 0                  #WSIZE, LAST
 00 0000000000011011  #length = 28
 1 000                #uncompressed
-01100011 00110011    #c3
-00110101 01100110    #5f
-00110100 01100001    #4a
-00110101 00110000    #50
+ascii ascii  ascii ascii  ascii ascii  ascii ascii
 00100000
-01100011 00110101    #c5
-01100011 00111001    #c9
-00110000 00111001    #09
-01100001 01100011    #ac
+ascii ascii  ascii ascii  ascii ascii  ascii ascii
 00100000
-01100100 00110011    #d3
-00110110 01100110    #6f
-00110110 01100100    #6d
-01100001 01100110    #af
+ascii ascii  ascii ascii  ascii ascii  ascii ascii
 00001101 00001010    #\r\n
 
 1 0                  #LAST, not empty
-00 0011011111111111  #length: 512*28
-000                  #1 of each block type
+00 length            #length
+0                    #1 literal block type
+0                    #1 insert&copy block type
+0001                 #distance block types
+01 00                #BTD is simple, 1 code word
+01                   #+1
+01 01                #BCD is simple, 2 code words
+00000                #BCxx: 1-4
+11000                #[13*x]: BC8433-16624
+00 0                 #first block count is 1
+
 000000               #POSTFIX=DIST=0
 01                   #context mode MSB6
 0001                 #2 literal trees
@@ -45,7 +43,12 @@ source = '''
 01 100 0 11 10011    #12 zeroes, 1, 51 zeros
 1                    #with IMTF
 
-0                    #1 distance prefix tree
+0001                 #2 distance prefix tree
+0                    #no run length encoding
+01 01                #simple, 2 code words
+0 1                  #0 and 1
+0000 1111            #the context map
+0                    #no IMTF
 
 11                   #literal prefix tree 0
 0111 00 00 0111      #4:1 (0) 0:unused 5:unused 0xxx:1 (1)
@@ -67,35 +70,37 @@ source = '''
 01 00                #simple, 1 code word
 0100011000           #insert26+xxx, copy 2
 
-#distance
-01 01                #simple, 2 code words
-000000               #last
+#distance code 0 and 1
+01 00                #simple, 1 code word
 010101               #distance: 11xxx-3 (011 gives 24)
+01 00                #simple, 1 code word
+000000               #last
 
 #metablock
 000                  #literal 26, copy 2
-0000                 #0, L0
-0100 1100 0010 1010 0110 1110 0001  #1234567, L1
+L0                   #a, L0
+L1 L1 L1 L1 L1 L1 L1
 0000                 #spatie
-0001                 #8, L0
-0101 1101 0011 1011 0111 01111 11111  #9abcdef, L1
+L0                   #0, L0
+L1 L1 L1 L1 L1 L1 L1
 0000
-1111                 #f, L0
-01111 0111 1011 0011 1101 0101 1001  #edcba98, L1
-1 111                #distance: 28
-#you see, it is 96bits + 3+4+4+3+1+2.5 bits = 113.5 bits
+L0                   #9, L0
+L1 L1 L1 L1 L1 L1 L1
+111                  #distance: 28
+#you see, it is 96bits + 3+4+4+3+2.5 bits = 112.5 bits
 
 000                  #literal 26, copy 2
-0000                 #0, L0
-0100 1100 0010 1010 0110 1110 0001  #1234567, L1
+L0                   #5, L0
+L1 L1 L1 L1 L1 L1 L1
 0000                 #spatie
-0001                 #8, L0
-0101 1101 0011 1011 0111 01111 11111  #9abcdef, L1
+L0                   #4, L0
+L1 L1 L1 L1 L1 L1 L1
 0000
-1111                 #f, L0
-01111 0111 1011 0011 1101 0101 1001  #edcba98, L1
-0                    #distance: 28
-#you see, it is 96bits + 3+4+4+3+1+2.5 bits = 110.5 bits
+L0                   #8, L0
+L1 L1 L1 L1 L1 L1 L1
+1 1111111111111      #block switch. Length: enough
+
+#from now on, it is 96bits + 3+4+4+3+1+2.5 bits = 110.5 bits
 '''
 
 L0 = {'0':'0000', '1':'1000', '2':'0100', '3':'1100',
@@ -108,13 +113,27 @@ L1 = {'0':'1000', '1':'0100', '2':'1100', '3':'0010',
       '8':'1001', '9':'0101', 'a':'1101', 'b':'0011',
       'c':'1011', 'd':'0111', 'e':'01111', 'f':'11111',
       ' ':'0000' }
+ascii = {'0':'00110000', '1':'00110001', '2':'00110010', '3':'00110011',
+         '4':'00110100', '5':'00110101', '6':'00110110', '7':'00110111',
+         '8':'00111000', '9':'00111001', 'a':'01100001', 'b':'01100010',
+         'c':'01100011', 'd':'01100100', 'e':'01100101', 'f':'01100110',
+         }
 
+#this length (in lines) gives about 10000 compressed bytes
+length = 725
+import random
 def processLine(line):
     global outputNum, outputLen
     #chop of comments
     try: line = line[:line.index('#')]
     except ValueError: pass
     for bits in line.split():
+        if bits in ('L0', 'L1', 'ascii', 'length'):
+            if bits=='length':
+                bits = '{:16b}'.format(length*28-1)
+            else:
+                char = '{:x}'.format(random.randrange(16))
+                bits = globals()[bits][char]
         outputNum = outputNum|int(bits,2)<<outputLen
         outputLen += len(bits)
         #write every time we happen to have a multiple of 8
@@ -128,19 +147,9 @@ outfile = open('hex.txt.manual','wb')
 for line in source.splitlines():
     processLine(line)
 
-length = 512
-import random
-for i in range(length):
-    randomValues = '{:024x}'.format(random.getrandbits(4*24))
-    processLine('000')
-    processLine(L0[randomValues[0]])
-    processLine(' '.join(L1[i] for i in randomValues[1:8]))
-    processLine(L1[' '])
-    processLine(L0[randomValues[8]])
-    processLine(' '.join(L1[i] for i in randomValues[9:16]))
-    processLine(L1[' '])
-    processLine(L0[randomValues[16]])
-    processLine(' '.join(L1[i] for i in randomValues[17:24]))
-    processLine('0')
+L17 = 'L1 '*7
+space = L1[' ']
+for i in range(length-2):
+    processLine('000 L0 '+L17+space+' L0 '+L17+space+' L0 '+L17)
 outfile.write(outputNum.to_bytes(outputLen+7>>3, 'little'))
 outfile.close()
